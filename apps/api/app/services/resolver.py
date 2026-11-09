@@ -51,10 +51,14 @@ async def _resolve_spotify_id(spotify_id: str) -> ResolvedTrack | None:
     if isrc:
         itunes = await preview_svc.lookup_itunes_by_isrc(isrc)
         if itunes and itunes.get("preview_url"):
-            return ResolvedTrack(
-                **itunes, spotify_id=spotify_id, isrc=isrc,
-                track_name=name, artist=artist,
-            )
+            merged = {
+                **itunes,
+                "isrc": isrc,
+                "spotify_id": spotify_id,
+                "track_name": name,
+                "artist": artist,
+            }
+            return ResolvedTrack(**merged)
 
     # 2) name+artist search fallback
     for source in (preview_svc.search_itunes, preview_svc.search_deezer):
@@ -64,8 +68,13 @@ async def _resolve_spotify_id(spotify_id: str) -> ResolvedTrack | None:
             results = []
         for result in results:
             if result.get("preview_url"):
-                return ResolvedTrack(
-                    **result, spotify_id=spotify_id, isrc=isrc,
-                    track_name=name, artist=artist,
-                )
+                merged = {
+                    **result,
+                    "isrc": isrc or result.get("isrc"),
+                    "spotify_id": spotify_id,
+                    "track_name": name,
+                    "artist": artist,
+                }
+                return ResolvedTrack(**merged)
+    return None
     return None

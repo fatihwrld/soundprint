@@ -104,7 +104,7 @@ async def audio_features(ids: str = Query(..., description="comma-separated ids 
             track_name=resolved["track_name"], artist=resolved["artist"],
             analyzer=data["analyzer"], features=features,
         )
-        out.append(AudioFeatures(id=raw_id, **features))
+        out.append(AudioFeatures(id=raw_id, isrc=resolved.get("isrc"), **features))
     return out
 
 

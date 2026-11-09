@@ -44,6 +44,28 @@ DISTRIBUTORS: dict[str, list[str]] = {
 }
 
 MAJORS = {"Universal Music Group", "Sony Music Entertainment", "Warner Music Group"}
+
+# Major-label imprints: owned by a major group, so they self-distribute.
+IMPRINT_OWNERSHIP: dict[str, str] = {
+    "Republic Records": "Universal Music Group",
+    "Interscope Records": "Universal Music Group",
+    "Geffen Records": "Universal Music Group",
+    "Def Jam Recordings": "Universal Music Group",
+    "Capitol Records": "Universal Music Group",
+    "Island Records": "Universal Music Group",
+    "Polydor Records": "Universal Music Group",
+    "A&M Records": "Universal Music Group",
+    "Aftermath Entertainment": "Universal Music Group",
+    "Columbia Records": "Sony Music Entertainment",
+    "RCA Records": "Sony Music Entertainment",
+    "Legacy Recordings": "Sony Music Entertainment",
+    "Atlantic Records": "Warner Music Group",
+    "Elektra Records": "Warner Music Group",
+    "Warner Records": "Warner Music Group",
+    "Parlophone Records": "Warner Music Group",
+}
+DISTRIBUTORS.update(IMPRINT_OWNERSHIP)
+
 INDEPENDENT_AGGREGATORS = {
     name for name, cats in DISTRIBUTORS.items()
     if name not in MAJORS
@@ -87,7 +109,11 @@ def classify(label: str | None, copyright_lines: list[str]) -> DistributorResult
 
     # Heuristic: a ©-line mentioning two aggregator names usually means
     # "distributed by" — keep the one from the label field first.
-    category = "major" if best.distributor in MAJORS else "independent-aggregator"
+    owner = IMPRINT_OWNERSHIP.get(best.distributor)
+    if best.distributor in MAJORS or owner:
+        category = "major"
+    else:
+        category = "independent-aggregator"
 
     return DistributorResult(
         distributor=best.distributor,

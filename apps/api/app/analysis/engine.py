@@ -67,6 +67,30 @@ def _try_essentia(path: str) -> dict | None:
     return {"engine": "essentia", "raw": results}
 
 
+_FFMPEG: str | None = None
+
+
+def _find_ffmpeg() -> str:
+    """Locate ffmpeg: PATH first, then known install locations (WinGet portable etc.)."""
+    global _FFMPEG
+    if _FFMPEG:
+        return _FFMPEG
+    import os
+    import shutil
+
+    found = shutil.which("ffmpeg")
+    if not found:
+        candidates = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+        ]
+        found = next((c for c in candidates if c and os.path.isfile(c)), None)
+    if not found:
+        raise RuntimeError("ffmpeg not found (install via winget or Docker image)")
+    _FFMPEG = found
+    return found
+
+
 def _decode_to_wav(path: Path) -> Path:
     """Convert any preview container (aac/m4a/mp3) to 22.05kHz mono WAV via ffmpeg."""
     import subprocess
@@ -74,7 +98,7 @@ def _decode_to_wav(path: Path) -> Path:
     wav_path = path.with_suffix(".wav")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
+            _find_ffmpeg(), "-y", "-loglevel", "error", "-i", str(path),
             "-ac", "1", "-ar", "22050", str(wav_path),
         ],
         check=True,
