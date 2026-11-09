@@ -54,10 +54,20 @@ async def lookup(track: str, artist: str | None = None) -> list[LookupTrack]:
         spotify = await preview_svc.search_spotify(track, artist)
     except (httpx.HTTPError, KeyError):
         spotify = []
-    results = itunes + deezer + spotify
+    results = spotify + itunes + deezer
     if not results:
         raise HTTPException(404, "No previews found")
-    return [LookupTrack(**r) for r in results]
+    # Dedupe across sources (same track found on multiple platforms),
+    # preferring Spotify (it carries distributor intelligence).
+    seen: set[tuple[str, str]] = set()
+    deduped: list[LookupTrack] = []
+    for r in results:
+        key = (str(r.get("track_name") or "").lower(), str(r.get("artist") or "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(LookupTrack(**r))
+    return deduped
 
 
 @app.get("/v1/audio-features", response_model=list[AudioFeatures])
