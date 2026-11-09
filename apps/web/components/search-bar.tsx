@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { searchTracks, type LookupTrack } from "@/lib/api";
+import { DistributorBadge } from "@/components/distributor-badge";
 
 export function SearchBar() {
   const [query, setQuery] = useState("");
@@ -61,6 +62,7 @@ export function SearchBar() {
                 {r.artist} · {r.album}
               </p>
             </div>
+            {r.source === "spotify" && <DistributorBadge spotifyId={r.source_id} />}
             <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] uppercase text-zinc-400">
               {r.source}
             </span>

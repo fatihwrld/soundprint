@@ -44,13 +44,17 @@ async def health() -> dict[str, Any]:
 
 @app.get("/v1/lookup", response_model=list[LookupTrack])
 async def lookup(track: str, artist: str | None = None) -> list[LookupTrack]:
-    """Search across preview sources (iTunes + Deezer), merged."""
+    """Search across preview sources (iTunes + Deezer + Spotify), merged."""
     itunes = await preview_svc.search_itunes(track, artist)
     try:
         deezer = await preview_svc.search_deezer(track, artist)
     except (httpx.HTTPError, KeyError):
         deezer = []
-    results = itunes + deezer
+    try:
+        spotify = await preview_svc.search_spotify(track, artist)
+    except (httpx.HTTPError, KeyError):
+        spotify = []
+    results = itunes + deezer + spotify
     if not results:
         raise HTTPException(404, "No previews found")
     return [LookupTrack(**r) for r in results]

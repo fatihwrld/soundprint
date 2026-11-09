@@ -69,3 +69,38 @@ def _normalize_itunes(result: dict) -> dict:
         "preview_url": result.get("previewUrl"),
         "artwork_url": result.get("artworkUrl100"),
     }
+
+
+async def search_spotify(track: str, artist: str | None = None) -> list[dict]:
+    """Official Web API search via Client Credentials (public catalog)."""
+    import asyncio
+    import time
+
+    from app.services import spotify_catalog
+
+    if not spotify_catalog.configured():
+        return []
+    query = f"track:{track}" + (f" artist:{artist}" if artist else "")
+    async with httpx.AsyncClient() as client:
+        token = await spotify_catalog._get_token(client)
+        resp = await client.get(
+            "https://api.spotify.com/v1/search",
+            params={"q": query, "type": "track", "limit": 10},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    results = []
+    for item in data.get("tracks", {}).get("items", []):
+        images = (item.get("album") or {}).get("images") or []
+        results.append({
+            "source": "spotify",
+            "source_id": item["id"],
+            "track_name": item.get("name"),
+            "artist": ", ".join(a["name"] for a in item.get("artists") or []),
+            "album": (item.get("album") or {}).get("name"),
+            "isrc": None,
+            "preview_url": item.get("preview_url"),
+            "artwork_url": images[0]["url"] if images else None,
+        })
+    return results
