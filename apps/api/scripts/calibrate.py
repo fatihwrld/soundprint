@@ -36,7 +36,26 @@ DATASET_URL = (
 DATASET_FILE = Path("scripts/dataset.csv")
 CALIBRATION_FILE = Path("app/analysis/calibration.json")
 
+PAIRS_FILE = Path("scripts/calibration_pairs.json")
+
 BOUNDED = engine.BOUNDED_FEATURES
+
+
+def load_pairs_store() -> dict:
+    """Cumulative pairs store: survive 429s / reruns.
+
+    Shape: {"done_ids": [spotify_track_id, ...], "pairs": [{id, raw, target}]}
+    """
+    if PAIRS_FILE.exists():
+        with open(PAIRS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return {"done_ids": [], "pairs": []}
+
+
+def save_pairs_store(store: dict) -> None:
+    tmp = PAIRS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store), encoding="utf-8")
+    tmp.replace(PAIRS_FILE)
 
 
 def download_dataset() -> None:
@@ -63,16 +82,21 @@ def load_rows() -> list[dict]:
 
 async def collect_pairs(n_target: int) -> list[dict]:
     rows = load_rows()
-    pairs: list[dict] = []
+    store = load_pairs_store()
+    done = set(store["done_ids"])  # never re-analyze a track we already have
+    pairs = list(store["pairs"])
     attempted = 0
     for row in rows:
         if len(pairs) >= n_target or attempted >= n_target * 3:
             break
-        attempted += 1
         track_id = row["track_id"]
+        if track_id in done:
+            continue
+        attempted += 1
         try:
             resolved = await resolver.resolve(track_id)
             if not resolved or not resolved.get("preview_url"):
+                done.add(track_id)  # unresolvable: don't retry next run either
                 continue
             path = await engine.download_preview(resolved["preview_url"])
             try:
@@ -90,7 +114,10 @@ async def collect_pairs(n_target: int) -> list[dict]:
                 "tempo": float(row["tempo"]),
                 "loudness": float(row["loudness"]),
             }
-            pairs.append({"raw": raw, "target": target})
+            pairs.append({"id": track_id, "raw": raw, "target": target})
+            store["done_ids"].append(track_id)
+            store["pairs"] = pairs
+            save_pairs_store(store)  # persist after EVERY success (429-proof)
             if len(pairs) % 20 == 0:
                 print(f"  {len(pairs)}/{n_target} analyzed (attempted {attempted})")
         except Exception as e:  # noqa: BLE001
@@ -116,6 +143,55 @@ def fit_isotonic(pairs: list[dict]) -> tuple[dict, dict]:
         mae = sum(abs(pr - yr) for pr, yr in zip(preds, ys)) / len(ys)
         report[feature] = {"mae": round(mae, 4), "n": len(ys)}
     return curves, report
+
+
+def fit_models(pairs: list[dict]) -> tuple[dict, dict, dict]:
+    """Multivariate fit: full descriptor vector → each bounded feature.
+
+    Returns (models, report, comparison_vs_isotonic). Models are shallow
+    GradientBoosting regressors; with n<300 we keep them heavily regularized
+    to avoid memorizing the pair set.
+    """
+    import numpy as np
+    from sklearn.ensemble import GradientBoostingRegressor
+    from sklearn.model_selection import KFold
+
+    X = np.array([[p["raw"].get(k, 0.0) for k in engine.RAW_FEATURE_KEYS] for p in pairs])
+    models: dict = {}
+    report: dict = {}
+    iso_report: dict = {}
+    n_folds = min(5, max(2, len(pairs) // 20))
+    cv = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+
+    for feature in BOUNDED:
+        y = np.array([p["target"][feature] for p in pairs])
+        model = GradientBoostingRegressor(
+            n_estimators=150, max_depth=2, learning_rate=0.06,
+            subsample=0.9, min_samples_leaf=5, random_state=42,
+        )
+        # Out-of-fold MAE as an honest accuracy estimate
+        oof = np.zeros(len(y))
+        for train_idx, test_idx in cv.split(X):
+            m = GradientBoostingRegressor(
+                n_estimators=150, max_depth=2, learning_rate=0.06,
+                subsample=0.9, min_samples_leaf=5, random_state=42,
+            )
+            m.fit(X[train_idx], y[train_idx])
+            oof[test_idx] = m.predict(X[test_idx])
+        model.fit(X, y)
+        models[feature] = model
+        # In-sample isotonic MAE for an apples-to-apples improvement check
+        iso_xs = np.array([engine._raw_scalar(feature, p["raw"]) for p in pairs])
+        iso = IsotonicRegression(out_of_bounds="clip").fit(iso_xs, y)
+        report[feature] = {"cv_mae": round(float(np.mean(np.abs(oof - y))), 4)}
+        iso_report[feature] = round(float(np.mean(np.abs(iso.predict(iso_xs) - y))), 4)
+    return models, report, iso_report
+
+
+def save_models(models: dict) -> None:
+    import joblib
+
+    joblib.dump(models, Path(__file__).with_name("calibration_model.pkl"))
 
 
 def fit_tempo(pairs: list[dict]) -> tuple[float, dict]:
@@ -159,24 +235,25 @@ async def main() -> None:
         return
 
     curves, feature_report = fit_isotonic(pairs)
+    models, gb_report, iso_report = fit_models(pairs)
+    save_models(models)
     tempo_scale, tempo_report = fit_tempo(pairs)
     loudness, loudness_report = fit_loudness(pairs)
 
     calibration = {
-        "version": 1,
+        "version": 2,
         "n_tracks": len(pairs),
         "dataset": "maharshipandya/spotify-tracks-dataset (BSD)",
-        "isotonic": curves,
+        "features": engine.RAW_FEATURE_KEYS,
+        "isotonic": curves,  # kept as fallback
         "tempo_scale": tempo_scale,
         "loudness": loudness,
     }
     CALIBRATION_FILE.write_text(json.dumps(calibration, indent=2), encoding="utf-8")
-    print(f"\nSaved {CALIBRATION_FILE}")
-    print("\nIn-sample MAE per feature:")
-    for feature, stats_ in feature_report.items():
-        print(f"  {feature:>18}: {stats_['mae']:.4f} (n={stats_['n']})")
-    print(f"  tempo_scale: {tempo_report}")
-    print(f"  loudness: {loudness_report}")
+    print(f"\nSaved {CALIBRATION_FILE} + calibration_model.pkl")
+    print(f"\nGradientBoosting (out-of-fold) vs isotonic (in-sample) MAE, per feature:")
+    for feature, stats_ in gb_report.items():
+        print(f"  {feature:>18}: gb {stats_['cv_mae']:.4f}  vs  iso {iso_report[feature]:.4f}  (n={len(pairs)})")
 
 
 if __name__ == "__main__":

@@ -96,6 +96,8 @@ def _decode_to_wav(path: Path) -> Path:
     import subprocess
 
     wav_path = path.with_suffix(".wav")
+    if wav_path == path:  # already WAV: no transcode needed
+        return path
     subprocess.run(
         [
             _find_ffmpeg(), "-y", "-loglevel", "error", "-i", str(path),
@@ -116,8 +118,10 @@ def raw_descriptors(path: str) -> dict:
     import numpy as np
     import scipy.stats as stats
 
-    y, sr = librosa.load(str(wav_path := _decode_to_wav(Path(path))), mono=True, duration=30)
-    wav_path.unlink(missing_ok=True)
+    wav_path = _decode_to_wav(Path(path))
+    y, sr = librosa.load(str(wav_path), mono=True, duration=30)
+    if wav_path != Path(path):
+        wav_path.unlink(missing_ok=True)
 
     oenv = librosa.onset.onset_strength(y=y, sr=sr)
     tempo_fn = getattr(librosa.feature, "tempo", None) or getattr(librosa.beat, "tempo")
@@ -134,6 +138,19 @@ def raw_descriptors(path: str) -> dict:
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     key_idx = int(np.argmax(chroma.mean(axis=1)))
 
+    # Harmonic/percussive source separation (HPSS): the percussive share is a
+    # much better danceability/beat proxy than full-mix RMS alone.
+    harm, perc = librosa.effects.hpss(y)
+    harm_rms = float(np.mean(librosa.feature.rms(y=harm)[0]))
+    perc_rms = float(np.mean(librosa.feature.rms(y=perc)[0]))
+    total = max(perc_rms + harm_rms, 1e-8)
+    perc_onset = float(np.mean(
+        librosa.onset.onset_strength(y=perc, sr=sr)
+    ))
+    harm_centroid = float(np.mean(
+        librosa.feature.spectral_centroid(y=harm, sr=sr)[0]
+    ))
+
     return {
         "tempo": tempo,
         "key": key_idx,
@@ -142,6 +159,10 @@ def raw_descriptors(path: str) -> dict:
         "centroid": float(np.mean(centroid)),
         "zcr": float(np.mean(zero_rate)),
         "flatness": float(np.mean(flatness)),
+        # HPSS descriptors (v2)
+        "perc_rms_ratio": perc_rms / total,
+        "perc_onset": perc_onset,
+        "harm_centroid": harm_centroid,
         "duration": float(len(y) / sr),
     }
 
@@ -195,6 +216,44 @@ BOUNDED_FEATURES = [
     "instrumentalness", "liveness", "valence",
 ]
 
+# Descriptor vector fed to the multivariate models (v2 calibration).
+RAW_FEATURE_KEYS = [
+    "tempo", "loudness", "rms", "centroid", "zcr", "flatness",
+    "perc_rms_ratio", "perc_onset", "harm_centroid",
+]
+
+_MODELS: dict | None = None
+
+
+def load_models() -> dict | None:
+    """Load fitted GradientBoosting models (v2) if present, cached."""
+    global _MODELS
+    if _MODELS is not None:
+        return _MODELS
+    model_file = Path(__file__).with_name("calibration_model.pkl")
+    if model_file.exists():
+        import joblib
+
+        _MODELS = joblib.load(model_file)
+        return _MODELS
+    return None
+
+
+def _apply_models(raw: dict, models: dict) -> dict:
+    """Predict bounded features from the full descriptor vector."""
+    import numpy as np
+
+    x = [[raw.get(k, 0.0) for k in RAW_FEATURE_KEYS]]
+    out: dict = {}
+    for feature in BOUNDED_FEATURES:
+        model = models.get(feature)
+        if model is None:
+            out[feature] = round(_raw_scalar(feature, raw), 2)
+        else:
+            # Models are trained on the [0,1] target scale; clip the tail.
+            out[feature] = float(np.clip(model.predict(x)[0], 0.0, 1.0))
+    return out
+
 
 def map_features(raw: dict, calibration: dict | None) -> dict:
     """Map raw descriptors → Spotify-schema features.
@@ -205,7 +264,21 @@ def map_features(raw: dict, calibration: dict | None) -> dict:
     import numpy as np
 
     out: dict = {}
-    if calibration:
+    if calibration and calibration.get("version", 1) >= 2:
+        # v2: multivariate GradientBoosting on the full descriptor vector.
+        models = load_models()
+        if models:
+            out.update({k: round(float(v), 2) for k, v in _apply_models(raw, models).items()})
+        else:
+            # JSON curves as fallback until the model file is restored
+            for feature in BOUNDED_FEATURES:
+                curve = calibration["isotonic"].get(feature)
+                x = _raw_scalar(feature, raw)
+                out[feature] = float(np.interp(x, curve["x"], curve["y"])) if curve else x
+        out["tempo"] = round(raw["tempo"] * calibration["tempo_scale"], 2)
+        a, b = calibration["loudness"]["a"], calibration["loudness"]["b"]
+        out["loudness"] = round(a * raw["loudness"] + b, 2)
+    elif calibration:
         for feature in BOUNDED_FEATURES:
             curve = calibration["isotonic"].get(feature)
             x = _raw_scalar(feature, raw)
