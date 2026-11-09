@@ -5,6 +5,7 @@ Client Credentials still works in dev mode for *public catalog* endpoints
 Requires SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET (free developer app).
 """
 
+import asyncio
 import logging
 import time
 
@@ -48,26 +49,33 @@ async def _get_token(client: httpx.AsyncClient) -> str:
     return _token
 
 
-async def get_track(track_id: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        token = await _get_token(client)
+async def _request(client: httpx.AsyncClient, url: str) -> dict:
+    """GET with Authorization; honors 429 Retry-After with bounded backoff."""
+    token = await _get_token(client)
+    for attempt in range(4):
         resp = await client.get(
-            f"{_API_BASE}/tracks/{track_id}",
+            url,
             headers={"Authorization": f"Bearer {token}"},
         )
+        if resp.status_code == 429:
+            retry_after = min(float(resp.headers.get("Retry-After", "30")), 60.0)
+            if attempt < 3:
+                logger.warning("Spotify API rate limited; retrying in %.0fs", retry_after)
+                await asyncio.sleep(retry_after)
+                continue
         resp.raise_for_status()
         return resp.json()
+    raise RuntimeError("Spotify API rate limit persisted after retries")
+
+
+async def get_track(track_id: str) -> dict:
+    async with httpx.AsyncClient() as client:
+        return await _request(client, f"{_API_BASE}/tracks/{track_id}")
 
 
 async def get_album(album_id: str) -> dict:
     async with httpx.AsyncClient() as client:
-        token = await _get_token(client)
-        resp = await client.get(
-            f"{_API_BASE}/albums/{album_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return await _request(client, f"{_API_BASE}/albums/{album_id}")
 
 
 def extract_album_rights(album: dict) -> tuple[str | None, list[str]]:

@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.db
 *.sqlite3
+**/scripts/dataset.csv
 .env
 .env.local
 .DS_Store
