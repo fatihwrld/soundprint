@@ -25,6 +25,8 @@ class AudioFeatures(BaseModel):
     time_signature: int = Field(ge=3, le=7)
     duration_ms: int | None = None
     analyzer: str = "essentia"
+    track_name: str | None = None
+    artist: str | None = None
 
 
 class DistributorResult(BaseModel):

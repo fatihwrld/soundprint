@@ -53,7 +53,6 @@ async def _features_one(raw_id: str) -> AudioFeatures:
     if cached:
         fields = {k: v for k, v in cached.items() if k in AudioFeatures.model_fields}
         return AudioFeatures(**fields, id=raw_id)
-
     resolved = await resolver_svc.resolve(raw_id)
     if not resolved or not resolved.get("preview_url"):
         raise HTTPException(404, f"Could not resolve a preview for '{raw_id}'")
@@ -83,7 +82,11 @@ async def _features_one(raw_id: str) -> AudioFeatures:
         track_name=resolved["track_name"], artist=resolved["artist"],
         analyzer=data["analyzer"], features=features,
     )
-    return AudioFeatures(id=raw_id, isrc=resolved.get("isrc"), **features)
+    return AudioFeatures(
+        id=raw_id, isrc=resolved.get("isrc"),
+        track_name=resolved.get("track_name"), artist=resolved.get("artist"),
+        **features,
+    )
 
 
 @app.get("/v1/lookup", response_model=list[LookupTrack])

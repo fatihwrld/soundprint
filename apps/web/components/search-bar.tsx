@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { searchTracks, type LookupTrack } from "@/lib/api";
 import { DistributorBadge } from "@/components/distributor-badge";
-
 const SOURCE_LABELS: Record<string, string> = {
   spotify: "Spotify",
   itunes: "Apple",
@@ -14,6 +14,7 @@ export function SearchBar() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LookupTrack[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const router = useRouter();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -52,7 +53,8 @@ export function SearchBar() {
         {results.map((r) => (
           <li
             key={`${r.source}-${r.source_id}`}
-            className="glass glass-hover flex items-center gap-3.5 !rounded-2xl p-3.5"
+            onClick={r.source === "spotify" ? () => router.push(`/track/${r.source_id}`) : undefined}
+            className={`glass glass-hover flex items-center gap-3.5 !rounded-2xl p-3.5 ${r.source === "spotify" ? "cursor-pointer" : ""}`}
           >
             {r.artwork_url ? (
               // eslint-disable-next-line @next/next/no-img-element
