@@ -2,6 +2,8 @@
 
 **Open-source, self-hostable replacement for Spotify's deprecated Audio Features API — plus catalog intelligence (distributor detection).**
 
+Live repo: **https://github.com/fatihwrld/soundprint**
+
 Spotify killed `/v1/audio-features` and `/v1/audio-analysis` in November 2024. Soundprint rebuilds them
 from real signal analysis (Essentia / librosa) on 30-second previews fetched from public sources
 (iTunes Search API, Deezer) — no Spotify API dependency, no proprietary ML mirroring.
@@ -85,4 +87,4 @@ docker compose up --build
 
 ## License
 
-MIT (TBD)
+MIT — see [LICENSE](./LICENSE)
