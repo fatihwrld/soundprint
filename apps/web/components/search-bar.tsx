@@ -4,6 +4,12 @@ import { useState } from "react";
 import { searchTracks, type LookupTrack } from "@/lib/api";
 import { DistributorBadge } from "@/components/distributor-badge";
 
+const SOURCE_LABELS: Record<string, string> = {
+  spotify: "Spotify",
+  itunes: "Apple",
+  deezer: "Deezer",
+};
+
 export function SearchBar() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LookupTrack[]>([]);
@@ -24,50 +30,52 @@ export function SearchBar() {
 
   return (
     <div className="w-full max-w-2xl">
-      <form onSubmit={onSubmit} className="flex gap-2">
+      <form onSubmit={onSubmit} className="flex gap-2.5">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Track name… e.g. Blinding Lights"
-          className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-zinc-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20"
+          placeholder="Şarkı adı… örn. Blinding Lights"
+          className="glass-input"
         />
-        <button
-          type="submit"
-          disabled={status === "loading"}
-          className="rounded-xl bg-gradient-to-b from-cyan-400 to-cyan-500 px-5 py-3 text-sm font-semibold text-cyan-950 transition hover:brightness-110 disabled:opacity-50"
-        >
+        <button type="submit" disabled={status === "loading"} className="btn-primary">
           {status === "loading" ? "…" : "Search"}
         </button>
       </form>
 
       {status === "error" && (
-        <p className="mt-3 text-sm text-rose-400">
-          API'ye ulaşılamadı — apps/api çalışıyor mu? (uvicorn app.main:app --reload)
+        <p className="mt-3 text-center text-sm text-rose-400">
+          API&apos;ye ulaşılamadı — apps/api çalışıyor mu?
         </p>
       )}
 
-      <ul className="mt-4 space-y-2">
+      <ul className="mt-5 space-y-2.5">
         {results.map((r) => (
           <li
             key={`${r.source}-${r.source_id}`}
-            className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3"
+            className="glass glass-hover flex items-center gap-3.5 !rounded-2xl p-3.5"
           >
-            {r.artwork_url && (
+            {r.artwork_url ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={r.artwork_url} alt="" className="h-10 w-10 rounded-md" />
+              <img
+                src={r.artwork_url}
+                alt=""
+                className="h-11 w-11 rounded-[10px] shadow-lg shadow-black/40"
+              />
+            ) : (
+              <div className="h-11 w-11 rounded-[10px] bg-white/10" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{r.track_name}</p>
+              <p className="truncate text-sm font-medium text-zinc-100">{r.track_name}</p>
               <p className="truncate text-xs text-zinc-400">
                 {r.artist} · {r.album}
               </p>
             </div>
             {r.source === "spotify" && <DistributorBadge spotifyId={r.source_id} />}
-            <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] uppercase text-zinc-400">
-              {r.source}
+            <span className="glass-soft !rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-400">
+              {SOURCE_LABELS[r.source] ?? r.source}
             </span>
             {r.preview_url && (
-              <audio controls preload="none" src={r.preview_url} className="h-8 max-w-[180px]" />
+              <audio controls preload="none" src={r.preview_url} className="h-8 max-w-[170px]" />
             )}
           </li>
         ))}

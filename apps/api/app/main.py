@@ -4,9 +4,11 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.analysis import engine
 from app import db
+from app.api_guard import ApiGuardMiddleware
 from app.config import get_settings
 from app.schemas import AudioFeatures, DistributorResult, LookupTrack
 from app.services import distributor as distributor_svc
@@ -22,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,21 +32,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ApiGuardMiddleware)
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "spotify_catalog": spotify_catalog.configured(),
         "database": settings.database_url.split("://")[0],
+        "api_keys_enabled": bool(settings.api_keys),
+        "rate_limit_per_minute": settings.rate_limit_per_minute,
     }
+
+
+async def _features_one(raw_id: str) -> AudioFeatures:
+    """Resolve → (cache?) → download → DSP → cache. Raises HTTPException on failure."""
+    cached = db.get_features(raw_id)
+    if cached:
+        fields = {k: v for k, v in cached.items() if k in AudioFeatures.model_fields}
+        return AudioFeatures(**fields, id=raw_id)
+
+    resolved = await resolver_svc.resolve(raw_id)
+    if not resolved or not resolved.get("preview_url"):
+        raise HTTPException(404, f"Could not resolve a preview for '{raw_id}'")
+
+    if resolved.get("isrc"):
+        by_isrc = db.get_by_isrc(resolved["isrc"])
+        if by_isrc:
+            db.put_features(
+                id=raw_id, isrc=resolved["isrc"], spotify_id=resolved.get("spotify_id"),
+                track_name=resolved["track_name"], artist=resolved["artist"],
+                analyzer=by_isrc["analyzer"], features=by_isrc,
+            )
+            return AudioFeatures(**by_isrc, id=raw_id)
+
+    path = await engine.download_preview(resolved["preview_url"])
+    try:
+        data = engine.analyze_preview(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+    features = {
+        k: v for k, v in data.items()
+        if k in AudioFeatures.model_fields and k != "id"
+    }
+    db.put_features(
+        id=raw_id, isrc=resolved.get("isrc"), spotify_id=resolved.get("spotify_id"),
+        track_name=resolved["track_name"], artist=resolved["artist"],
+        analyzer=data["analyzer"], features=features,
+    )
+    return AudioFeatures(id=raw_id, isrc=resolved.get("isrc"), **features)
 
 
 @app.get("/v1/lookup", response_model=list[LookupTrack])
 async def lookup(track: str, artist: str | None = None) -> list[LookupTrack]:
-    """Search across preview sources (iTunes + Deezer + Spotify), merged."""
+    """Search across preview sources (Spotify + iTunes + Deezer), merged + deduped."""
     itunes = await preview_svc.search_itunes(track, artist)
     try:
         deezer = await preview_svc.search_deezer(track, artist)
@@ -54,11 +98,10 @@ async def lookup(track: str, artist: str | None = None) -> list[LookupTrack]:
         spotify = await preview_svc.search_spotify(track, artist)
     except (httpx.HTTPError, KeyError):
         spotify = []
+
     results = spotify + itunes + deezer
     if not results:
         raise HTTPException(404, "No previews found")
-    # Dedupe across sources (same track found on multiple platforms),
-    # preferring Spotify (it carries distributor intelligence).
     seen: set[tuple[str, str]] = set()
     deduped: list[LookupTrack] = []
     for r in results:
@@ -76,50 +119,36 @@ async def audio_features(ids: str = Query(..., description="comma-separated ids 
     out: list[AudioFeatures] = []
     for raw_id in ids.split(","):
         raw_id = raw_id.strip()
+        if raw_id:
+            out.append(await _features_one(raw_id))
+    return out
+
+
+class BatchRequest(BaseModel):
+    ids: list[str]
+
+
+@app.post("/v1/audio-features/batch")
+async def audio_features_batch(req: BatchRequest) -> dict[str, Any]:
+    """Batch analysis: up to 100 ids; per-item failures don't break the batch."""
+    if not req.ids:
+        raise HTTPException(400, "ids must not be empty")
+    if len(req.ids) > 100:
+        raise HTTPException(400, "Maximum 100 ids per batch")
+
+    results: list[AudioFeatures] = []
+    errors: list[dict[str, str]] = []
+    for raw_id in req.ids:
+        raw_id = raw_id.strip()
         if not raw_id:
             continue
-
-        # 1) cache (by the identifier itself)
-        cached = db.get_features(raw_id)
-        if cached:
-            fields = {k: v for k, v in cached.items() if k in AudioFeatures.model_fields}
-            out.append(AudioFeatures(**fields, id=raw_id))
-            continue
-
-        # 2) resolve to metadata + preview (Spotify ID → ISRC → preview)
-        resolved = await resolver_svc.resolve(raw_id)
-        if not resolved or not resolved.get("preview_url"):
-            raise HTTPException(404, f"Could not resolve a preview for '{raw_id}'")
-
-        # 3) ISRC-level cache before spending DSP time
-        if resolved.get("isrc"):
-            by_isrc = db.get_by_isrc(resolved["isrc"])
-            if by_isrc:
-                db.put_features(
-                    id=raw_id, isrc=resolved["isrc"], spotify_id=resolved.get("spotify_id"),
-                    track_name=resolved["track_name"], artist=resolved["artist"],
-                    analyzer=by_isrc["analyzer"], features=by_isrc,
-                )
-                out.append(AudioFeatures(**by_isrc, id=raw_id))
-                continue
-
-        path = await engine.download_preview(resolved["preview_url"])
         try:
-            data = engine.analyze_preview(path)
-        finally:
-            path.unlink(missing_ok=True)
-
-        features = {
-            k: v for k, v in data.items()
-            if k in AudioFeatures.model_fields and k != "id"
-        }
-        db.put_features(
-            id=raw_id, isrc=resolved.get("isrc"), spotify_id=resolved.get("spotify_id"),
-            track_name=resolved["track_name"], artist=resolved["artist"],
-            analyzer=data["analyzer"], features=features,
-        )
-        out.append(AudioFeatures(id=raw_id, isrc=resolved.get("isrc"), **features))
-    return out
+            results.append(await _features_one(raw_id))
+        except HTTPException as e:
+            errors.append({"id": raw_id, "error": e.detail})
+        except Exception as e:
+            errors.append({"id": raw_id, "error": str(e)})
+    return {"results": results, "errors": errors, "count": len(results)}
 
 
 @app.get("/v1/distributor/{track_id}", response_model=DistributorResult)

@@ -136,7 +136,10 @@ def _librosa_fallback(path: str) -> dict:
     rms_n = float(np.clip(np.mean(rms) / 0.3, 0, 1))
     energy = rms_n
     loudness = float(20 * np.log10(max(np.mean(np.abs(y)), 1e-8)))
-    danceability = min(1.0, max(0.0, (tempo / 180.0) * 0.6 + rms_n * 0.4))
+    # M2-lite: logistic squash keeps danceability in a sane band until the
+    # full AcousticBrainz regression calibration lands.
+    dance_raw = 0.5 * (tempo / 180.0) + 0.3 * rms_n + 0.2 * (1.0 - float(np.clip(np.mean(centroid) / 3000.0, 0, 1)))
+    danceability = float(1.0 / (1.0 + np.exp(-(dance_raw - 0.6) * 6.0)))
     speechiness = float(np.clip(np.mean(zero_rate) * 2.5, 0, 1))
     acousticness = float(np.clip(1.0 - np.mean(centroid) / 3000.0, 0, 1))
     instrumentalness = float(np.clip(1.0 - np.mean(zero_rate) * 4, 0, 1))

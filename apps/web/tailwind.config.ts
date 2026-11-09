@@ -5,8 +5,11 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
-        mono: ["var(--font-geist-mono)", "monospace"],
+        sans: [
+          "-apple-system", "BlinkMacSystemFont", "SF Pro Display", "Inter",
+          "Segoe UI", "Roboto", "sans-serif",
+        ],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "monospace"],
       },
       colors: {
         ink: {

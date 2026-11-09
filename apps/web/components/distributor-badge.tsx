@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { fetchDistributor, type DistributorResult } from "@/lib/api";
 
 const CATEGORY_STYLES: Record<DistributorResult["category"], string> = {
-  major: "border-indigo-400/40 bg-indigo-400/10 text-indigo-300",
-  "independent-aggregator": "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
-  "label-imprint": "border-amber-400/40 bg-amber-400/10 text-amber-300",
-  unknown: "border-white/10 bg-white/5 text-zinc-400",
+  major: "text-indigo-300 border-indigo-300/25",
+  "independent-aggregator": "text-emerald-300 border-emerald-300/25",
+  "label-imprint": "text-amber-300 border-amber-300/25",
+  unknown: "text-zinc-500 border-white/10",
 };
 
 export function DistributorBadge({ spotifyId }: { spotifyId: string }) {
@@ -32,7 +32,7 @@ export function DistributorBadge({ spotifyId }: { spotifyId: string }) {
   if (failed) return null;
   if (!data) {
     return (
-      <span className="h-5 w-16 animate-pulse rounded-full border border-white/10 bg-white/5" />
+      <span className="glass-soft h-5 w-16 animate-pulse !rounded-full" />
     );
   }
   if (data.distributor === "unknown") return null;
@@ -44,7 +44,7 @@ export function DistributorBadge({ spotifyId }: { spotifyId: string }) {
           ? data.evidence.join(" · ")
           : data.label ?? ""
       }
-      className={`inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium ${CATEGORY_STYLES[data.category]}`}
+      className={`glass-soft inline-flex max-w-[220px] items-center gap-1 truncate !rounded-full px-2.5 py-1 text-[10px] font-medium ${CATEGORY_STYLES[data.category]}`}
     >
       {data.category === "major" && "🏷 "}
       {data.distributor}

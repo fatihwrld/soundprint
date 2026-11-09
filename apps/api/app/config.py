@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./soundprint.db"
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
+    api_keys: list[str] = []
+    rate_limit_per_minute: int = 60
     # Temporary in-memory cache for M0; Postgres lands in M1
     cache_ttl_seconds: int = 86400
 
